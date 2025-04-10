@@ -5,7 +5,7 @@ Integrate Nansen's wallet labeling and Glassnode's on-chain metrics to identify 
 
 This is a Python implementation for arbitrage trading on Binance and BitMEX using above mentioned Whale and Market Maker datasets.
 
-Key Features:
+# Key Features:
 
 Nansen Integration: Uses Nansen's API to fetch whale and market maker wallets.
 
@@ -15,7 +15,7 @@ Dynamic Position Sizing: Adjusts position size based on wallet liquidity.
 
 Risk Management: Maintains a stop-loss and limits exposure to 10% of capital.
 
-Setup Instructions:
+# Setup Instructions:
 
 Replace YOUR_API_KEY, YOUR_SECRET, NANSEN_API_KEY, and GLASSNODE_API_KEY with actual credentials.
 
