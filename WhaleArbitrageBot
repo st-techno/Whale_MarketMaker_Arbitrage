@@ -1,0 +1,124 @@
+Copyright @ ST Technologies
+
+import ccxt
+import pandas as pd
+import requests
+import time
+
+class WhaleArbitrageBot:
+    def __init__(self):
+        self.binance = ccxt.binance({
+            'apiKey': 'YOUR_API_KEY',
+            'secret': 'YOUR_SECRET',
+            'options': {'defaultType': 'future'}
+        })
+        self.bitmex = ccxt.bitmex({
+            'apiKey': 'YOUR_API_KEY',
+            'secret': 'YOUR_SECRET'
+        })
+        self.fee_rate = 0.0004  # 0.04% taker fee
+        self.risk_params = {
+            'max_exposure': 0.1,  # 10% of capital
+            'stop_loss': 0.02,    # 2%
+            'volatility_window': 14
+        }
+        self.nansen_api = 'NANSEN_API_KEY'
+        self.glassnode_api = 'GLASSNODE_API_KEY'
+
+    def get_whale_market_makers(self):
+        """Fetch whale and market maker wallets from Nansen"""
+        try:
+            nansen_response = requests.get(
+                f'https://api.nansen.ai/v1/wallets/labels',
+                headers={'Authorization': f'Bearer {self.nansen_api}'}
+            )
+            whale_market_makers = []
+            for wallet in nansen_response.json():
+                if wallet['label'] in ['Whale', 'Market Maker']:
+                    whale_market_makers.append(wallet['address'])
+            return whale_market_makers
+        except Exception as e:
+            print(f"Nansen API error: {e}")
+            return []
+
+    def get_onchain_liquidity(self, wallet):
+        """Fetch liquidity metrics for a wallet using Glassnode"""
+        try:
+            glassnode_response = requests.get(
+                f'https://api.glassnode.com/v1/metrics/addresses/{wallet}/balance',
+                params={'api_key': self.glassnode_api}
+            )
+            return glassnode_response.json()['data'][0]['v']
+        except Exception as e:
+            print(f"Glassnode API error: {e}")
+            return 0
+
+    def calculate_spread(self):
+        """Get BTC-USDT perpetual spreads with fee adjustment"""
+        binance_ticker = self.binance.fetch_ticker('BTC/USDT:USDT')
+        bitmex_ticker = self.bitmex.fetch_ticker('BTC/USD')
+        
+        # Convert BitMEX USD to USDT
+        bitmex_price = bitmex_ticker['last'] * 1.0003  # Stablecoin peg adjustment
+        effective_fee = 2 * self.fee_rate  # Entry + exit
+        
+        return {
+            'binance': binance_ticker['last'] * (1 - effective_fee),
+            'bitmex': bitmex_price * (1 + effective_fee),
+            'raw_spread': binance_ticker['last'] - bitmex_price
+        }
+
+    def dynamic_position_size(self, liquidity):
+        """Adjust position based on liquidity"""
+        balance = self.binance.fetch_balance()['USDT']['free']
+        return min(balance * self.risk_params['max_exposure'] * (liquidity / 1000), balance)
+
+    def execute_arbitrage(self):
+        """Main trading logic with risk controls"""
+        try:
+            whale_market_makers = self.get_whale_market_makers()
+            for wallet in whale_market_makers:
+                liquidity = self.get_onchain_liquidity(wallet)
+                if liquidity > 1000:  # Significant liquidity threshold
+                    spread_data = self.calculate_spread()
+                    
+                    if spread_data['binance'] > spread_data['bitmex'] * 1.0015:  # 0.15% threshold
+                        position_size = self.dynamic_position_size(liquidity)
+                        
+                        # Binance short + BitMEX long
+                        self.binance.create_market_sell_order(
+                            'BTC/USDT:USDT', 
+                            position_size / spread_data['binance'],
+                            params={'stopLossPrice': spread_data['binance'] * (1 - self.risk_params['stop_loss'])}
+                        )
+                        self.bitmex.create_market_buy_order(
+                            'BTC/USD', 
+                            position_size / spread_data['bitmex']
+                        )
+                        print(f"Arbitrage executed: {position_size:.2f} USDT")
+                        
+                    elif spread_data['bitmex'] > spread_data['binance'] * 1.0015:
+                        position_size = self.dynamic_position_size(liquidity)
+                        
+                        # Binance long + BitMEX short
+                        self.binance.create_market_buy_order(
+                            'BTC/USDT:USDT', 
+                            position_size / spread_data['binance'],
+                            params={'stopLossPrice': spread_data['binance'] * (1 + self.risk_params['stop_loss'])}
+                        )
+                        self.bitmex.create_market_sell_order(
+                            'BTC/USD', 
+                            position_size / spread_data['bitmex']
+                        )
+                        print(f"Arbitrage executed: {position_size:.2f} USDT")
+                    
+        except Exception as e:
+            print(f"Execution error: {str(e)}")
+            time.sleep(60)
+
+if __name__ == "__main__":
+    bot = WhaleArbitrageBot()
+    while True:
+        bot.execute_arbitrage()
+        time.sleep(300)  # 5 minute interval
+
